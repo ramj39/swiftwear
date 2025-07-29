@@ -5,6 +5,10 @@ import streamlit as st
 # 🧪 Streamlit app setup
 st.set_page_config(page_title="Compound Properties Resolver", layout="wide")
 st.title("🔍 PubChem Compound Properties Resolver")
+isomeric = props.get("IsomericSMILES")
+canonical = props.get("CanonicalSMILES")
+
+smiles = isomeric if isomeric else canonical if canonical else "Not Found"
 
 # 🌟 Lookup by compound name (direct query)
 def fetch_properties_by_name(name):
