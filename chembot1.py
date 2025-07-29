@@ -1,4 +1,5 @@
 import requests
+import rdkit
 from rdkit import Chem
 
 # ✅ Validate SMILES using RDKit
