@@ -156,5 +156,5 @@ def main():
             outfile.flush()  # Write after each row
             time.sleep(0.3)  # Be polite to servers
 
-if _name_ == '_main_':
+if __name__ == '__main__':
     main()
