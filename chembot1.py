@@ -14,15 +14,20 @@ def validate_smiles(smiles):
     except Exception:
         return False
 
-# 🔹 PubChem Resolver with enhanced error handling
+# 🔹 PubChem Resolver
 def resolve_with_pubchem(name):
     try:
         encoded_name = quote(name)
         url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{encoded_name}/property/IsomericSMILES,MolecularWeight/JSON"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+        headers = {'User-Agent': 'ChemicalResolver/1.0'}
         response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()  # Raise exception for HTTP errors
+        response.raise_for_status()
         data = response.json()
+        
+        # Handle case where no properties are found
+        if not data.get('PropertyTable', {}).get('Properties'):
+            return None
+            
         props = data['PropertyTable']['Properties'][0]
         return {
             'source': 'PubChem',
@@ -34,104 +39,75 @@ def resolve_with_pubchem(name):
         print(f"PubChem error for '{name}': {str(e)}", file=sys.stderr)
         return None
 
-# 🔹 NIH CIR Resolver with multiple endpoints
+# 🔹 NIH CIR Resolver
 def resolve_with_cir(name):
-    endpoints = [
-        "smiles",
-        "stdinchikey",
-        "iupac_name"
-    ]
-    
-    for endpoint in endpoints:
-        try:
-            encoded_name = quote(name)
-            url = f"https://cactus.nci.nih.gov/chemical/structure/{encoded_name}/{endpoint}"
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
+    try:
+        encoded_name = quote(name)
+        url = f"https://cactus.nci.nih.gov/chemical/structure/{encoded_name}/smiles"
+        headers = {'User-Agent': 'ChemicalResolver/1.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        smiles = response.text.strip()
+        
+        if not validate_smiles(smiles):
+            return None
             
-            content = response.text.strip()
-            if endpoint == "smiles" and validate_smiles(content):
-                return {
-                    'source': 'CIR',
-                    'name': name,
-                    'smiles': content,
-                    'mw': None
-                }
-            elif endpoint == "stdinchikey" and content:
-                # Use InChIKey to get SMILES from PubChem
-                inchikey = content
-                pubchem_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/{inchikey}/property/IsomericSMILES/JSON"
-                pub_response = requests.get(pubchem_url, headers=headers, timeout=10)
-                pub_response.raise_for_status()
-                pub_data = pub_response.json()
-                smiles = pub_data['PropertyTable']['Properties'][0]['IsomericSMILES']
-                if validate_smiles(smiles):
-                    return {
-                        'source': 'CIR+PubChem',
-                        'name': name,
-                        'smiles': smiles,
-                        'mw': None
-                    }
-        except Exception as e:
-            print(f"CIR error for '{name}' ({endpoint}): {str(e)}", file=sys.stderr)
-            continue
-    
-    return None
+        return {
+            'source': 'CIR',
+            'name': name,
+            'smiles': smiles,
+            'mw': None
+        }
+    except Exception as e:
+        print(f"CIR error for '{name}': {str(e)}", file=sys.stderr)
+        return None
 
-# 🔹 OPSIN Resolver with improved error handling
+# 🔹 OPSIN Resolver
 def resolve_with_opsin(name):
     try:
         encoded_name = quote(name)
         url = f"https://opsin.ch.cam.ac.uk/opsin/{encoded_name}.json"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+        headers = {'User-Agent': 'ChemicalResolver/1.0'}
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
         smiles = data.get('smiles')
-        if validate_smiles(smiles):
-            return {
-                'source': 'OPSIN',
-                'name': name,
-                'smiles': smiles,
-                'mw': data.get('molWeight')
-            }
+        
+        if not validate_smiles(smiles):
+            return None
+            
+        return {
+            'source': 'OPSIN',
+            'name': name,
+            'smiles': smiles,
+            'mw': data.get('molWeight')
+        }
     except Exception as e:
         print(f"OPSIN error for '{name}': {str(e)}", file=sys.stderr)
-    
-    return None
+        return None
 
-# 🧠 Unified Resolver Chain with fallback strategies
+# 🧠 Unified Resolver
 def resolve_name_to_smiles(name):
     # Try all resolvers in sequence
     for resolver in [resolve_with_pubchem, resolve_with_opsin, resolve_with_cir]:
         result = resolver(name)
-        if result and result.get('smiles'):
+        if result:
             return result
     
-    # Fallback 1: Try name without special characters
-    clean_name = ''.join(e for e in name if e.isalnum() or e in " -_")
-    if clean_name != name:
-        for resolver in [resolve_with_pubchem, resolve_with_opsin, resolve_with_cir]:
-            result = resolver(clean_name)
-            if result and result.get('smiles'):
-                result['name'] = name  # Keep original name in results
-                return result
-    
-    # Fallback 2: Try common name variations
+    # Fallback: Try name variations
     variations = [
+        name,
         name.lower(),
         name.title(),
         name.upper()
     ]
     
+    # Try variations with different resolvers
     for variant in variations:
-        if variant == name:
-            continue
         for resolver in [resolve_with_pubchem, resolve_with_opsin, resolve_with_cir]:
             result = resolver(variant)
-            if result and result.get('smiles'):
-                result['name'] = name  # Keep original name in results
+            if result:
+                result['name'] = name  # Keep original name
                 return result
     
     return {
@@ -161,19 +137,24 @@ def main():
             if not name:
                 continue
                 
-            # Skip header row if exists
+            # Skip header row
             if i == 0 and name.lower() in ['name', 'compound', 'chemical']:
                 continue
                 
-            result = resolve_name_to_smiles(name)
-            writer.writerow([
-                result['name'],
-                result['smiles'] if result['smiles'] else '',
-                result['source'],
-                result['mw'] if result['mw'] is not None else ''
-            ])
+            try:
+                result = resolve_name_to_smiles(name)
+                writer.writerow([
+                    result['name'],
+                    result['smiles'] or '',
+                    result['source'],
+                    result['mw'] or ''
+                ])
+            except Exception as e:
+                print(f"Error processing '{name}': {str(e)}", file=sys.stderr)
+                writer.writerow([name, '', 'Error', ''])
+            
             outfile.flush()  # Write after each row
-            time.sleep(0.2)   # Be polite to servers
+            time.sleep(0.3)  # Be polite to servers
 
 if _name_ == '_main_':
     main()
